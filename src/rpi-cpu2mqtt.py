@@ -60,7 +60,7 @@ def check_memory():
 
 
 def check_cpu_temp():
-    full_cmd = "cat /sys/class/thermal/thermal_zone*/temp 2> /dev/null | sed 's/\(.\)..$//' | tail -n 1"
+    full_cmd = "cat /sys/class/thermal/thermal_zone0/temp 2> /dev/null | sed 's/\(.\)..$//' | tail -n 1"
     try:
         p = subprocess.Popen(full_cmd, shell=True, stdout=subprocess.PIPE).communicate()[0]
         cpu_temp = p.decode("utf-8").replace('\n', ' ').replace('\r', '')
@@ -96,43 +96,52 @@ def config_json(what_config):
 	    "manufacturer": "Raspberry Pi",
 	    "model": model_name,
 	    "name": hostname
-	}
+        }
     }
 
-    data["state_topic"] = config.mqtt_topic_prefix + "/" + hostname + "/" + what_config
+    data["state_topic"] = config.mqtt_topic_prefix + "/" + hostname
+    if not config.group_messages: data["state_topic"] = data["state_topic"] + "/" + what_config
     data["unique_id"] = hostname + "_" + what_config
     if what_config == "cpuload":
         data["icon"] = "mdi:speedometer"
         data["name"] = hostname + " CPU Usage"
         data["unit_of_measurement"] = "%"
+        if config.group_messages: data["value_template"] = "{{value_json.cpu_load}}"
     elif what_config == "cputemp":
         data["icon"] = "hass:thermometer"
         data["name"] = hostname + " CPU Temperature"
         data["unit_of_measurement"] = "°C"
+        if config.group_messages: data["value_template"] = "{{value_json.cpu_temp}}" 
     elif what_config == "diskusage":
         data["icon"] = "mdi:harddisk"
         data["name"] = hostname + " Disk Usage"
         data["unit_of_measurement"] = "%"
+        if config.group_messages: data["value_template"] = "{{value_json.used_space}}" 
     elif what_config == "voltage":
         data["icon"] = "mdi:speedometer"
         data["name"] = hostname + " CPU Voltage"
         data["unit_of_measurement"] = "V"
+        if config.group_messages: data["value_template"] = "{{value_json.voltage}}" 
     elif what_config == "swap":
         data["icon"] = "mdi:harddisk"
         data["name"] = hostname + " Disk Swap"
         data["unit_of_measurement"] = "%"
+        if config.group_messages: data["value_template"] = "{{value_json.swap}}" 
     elif what_config == "memory":
         data["icon"] = "mdi:memory"
         data["name"] = hostname + " Memory Usage"
         data["unit_of_measurement"] = "%"
+        if config.group_messages: data["value_template"] = "{{value_json.memory}}" 
     elif what_config == "sys_clock_speed":
         data["icon"] = "mdi:speedometer"
         data["name"] = hostname + " CPU Clock Speed"
         data["unit_of_measurement"] = "MHz"
+        if config.group_messages: data["value_template"] = "{{value_json.sys_clock_speed}}" 
     elif what_config == "uptime_days":
         data["icon"] = "mdi:timer"
         data["name"] = hostname + " Uptime"
         data["unit_of_measurement"] = "days"
+        if config.group_messages: data["value_template"] = "{{value_json.uptime_days}}" 
     else:
         return ""
     # Return our built discovery config
@@ -212,16 +221,43 @@ def bulk_publish_to_mqtt(cpu_load=0, cpu_temp=0, used_space=0, voltage=0, sys_cl
                          uptime_days=0):
     # compose the CSV message containing the measured values
 
-    values = cpu_load, float(cpu_temp), used_space, float(voltage), int(sys_clock_speed), swap, memory, uptime_days
-    values = str(values)[1:-1]
+    #values = cpu_load, float(cpu_temp), used_space, float(voltage), int(sys_clock_speed), swap, memory, uptime_days
+    #values = str(values)[1:-1]
+
+    values = {
+            "cpu_load":cpu_load,
+            "cpu_temp":float(cpu_temp),
+            "used_space":used_space,
+            "voltage":float(voltage),
+            "sys_clock_speed":int(sys_clock_speed),
+            "swap":swap,
+            "memory":memory,
+            "uptime_days":uptime_days
+            }
+    values_json = json.dumps(values)
 
     # connect to mqtt server
     client = paho.Client()
     client.username_pw_set(config.mqtt_user, config.mqtt_password)
     client.connect(config.mqtt_host, int(config.mqtt_port))
 
+    configs_enabled=[]
+    if config.cpu_load: configs_enabled.append("cpuload")
+    if config.cpu_temp: configs_enabled.append("cputemp")
+    if config.used_space: configs_enabled.append("diskusage")
+    if config.voltage: configs_enabled.append("voltage")
+    if config.sys_clock_speed: configs_enabled.append("sys_clock_speed")
+    if config.swap: configs_enabled.append("swap")
+    if config.memory: configs_enabled.append("memory")
+    if config.uptime: configs_enabled.append("uptime_days")
+
+    if config.discovery_messages:
+        for c in configs_enabled:
+            client.publish("homeassistant/sensor/"+config.mqtt_topic_prefix + "/" + hostname + "_"+c+"/config", config_json(c), qos=0)
+            time.sleep(config.sleep_time)
+
     # publish monitored values to MQTT
-    client.publish(config.mqtt_topic_prefix + "/" + hostname, values, qos=1)
+    client.publish(config.mqtt_topic_prefix + "/" + hostname, values_json, qos=1)
 
     # disconnect from mqtt server
     client.disconnect()
